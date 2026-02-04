@@ -1,0 +1,261 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Dash Standalone</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #020617; font-family: sans-serif; }
+        canvas { display: block; touch-action: none; background: #000; width: 100vw; height: 100vh; object-fit: contain; }
+        .font-orbitron { font-family: 'Orbitron', sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 450;
+        const GRAVITY = 0.8;
+        const JUMP_FORCE = -11;
+        const SHIP_THRUST = -0.6;
+        const SHIP_GRAVITY = 0.35;
+        const BASE_SPEED = 6.5;
+        const PLAYER_X_OFFSET = 120;
+        const PLAYER_SIZE = 32;
+
+        const COLORS = {
+            PRIMARY: '#00f2ff',
+            SECONDARY: '#ff00ff',
+            ACCENT: '#ffff00',
+            GROUND: '#111827',
+            SPIKE: '#ff4d4d'
+        };
+
+        const Game = () => {
+            const [status, setStatus] = useState('MENU');
+            const [score, setScore] = useState(0);
+            const [highScore, setHighScore] = useState(parseInt(localStorage.getItem('highScore') || '0'));
+            
+            const canvasRef = useRef(null);
+            const requestRef = useRef(null);
+            const scoreRef = useRef(0);
+            const isInputActiveRef = useRef(false);
+
+            const playerRef = useRef({
+                y: CANVAS_HEIGHT - 132,
+                vy: 0,
+                rotation: 0,
+                mode: 'CUBE',
+                isGrounded: true
+            });
+
+            const obstaclesRef = useRef([]);
+            const particlesRef = useRef([]);
+            const frameCountRef = useRef(0);
+            const gameSpeedRef = useRef(BASE_SPEED);
+
+            const spawnObstacle = () => {
+                const groundY = CANVAS_HEIGHT - 100;
+                const spawnX = CANVAS_WIDTH + 150;
+                const rand = Math.random();
+                
+                if (rand < 0.2) {
+                    obstaclesRef.current.push({ x: spawnX, y: groundY - 32, w: 32, h: 32, type: 'SPIKE' });
+                } else if (rand < 0.4) {
+                    obstaclesRef.current.push({ x: spawnX, y: groundY - (Math.random() > 0.5 ? 60 : 150), w: 50, h: 50, type: 'SAW' });
+                } else if (rand < 0.6) {
+                    obstaclesRef.current.push({ x: spawnX, y: groundY - 180, w: 40, h: 120, type: 'PORTAL' });
+                } else {
+                    obstaclesRef.current.push({ x: spawnX, y: groundY - 40, w: 40, h: 40, type: 'BLOCK' });
+                }
+            };
+
+            const update = () => {
+                const player = playerRef.current;
+                const groundY = CANVAS_HEIGHT - 100;
+
+                if (player.mode === 'CUBE') {
+                    if (isInputActiveRef.current && player.isGrounded) {
+                        player.vy = JUMP_FORCE;
+                        player.isGrounded = false;
+                    }
+                    player.vy += GRAVITY;
+                    player.y += player.vy;
+                    if (player.y + PLAYER_SIZE >= groundY) {
+                        player.y = groundY - PLAYER_SIZE;
+                        player.vy = 0;
+                        player.isGrounded = true;
+                        player.rotation = Math.round(player.rotation / (Math.PI/2)) * (Math.PI/2);
+                    } else {
+                        player.rotation += 0.16;
+                    }
+                } else {
+                    if (isInputActiveRef.current) player.vy += SHIP_THRUST;
+                    else player.vy += SHIP_GRAVITY;
+                    player.vy *= 0.98;
+                    player.y += player.vy;
+                    player.rotation = Math.max(-0.5, Math.min(0.5, player.vy * 0.08));
+                    if (player.y < 0) player.y = 0;
+                    if (player.y + PLAYER_SIZE >= groundY) player.y = groundY - PLAYER_SIZE;
+                }
+
+                obstaclesRef.current.forEach(obs => obs.x -= gameSpeedRef.current);
+                obstaclesRef.current = obstaclesRef.current.filter(obs => obs.x > -100);
+
+                for (let obs of obstaclesRef.current) {
+                    const hit = PLAYER_X_OFFSET < obs.x + obs.w - 5 && 
+                                PLAYER_X_OFFSET + PLAYER_SIZE > obs.x + 5 && 
+                                player.y < obs.y + obs.h - 5 && 
+                                player.y + PLAYER_SIZE > obs.y + 5;
+                    if (hit) {
+                        if (obs.type === 'PORTAL') {
+                            player.mode = player.mode === 'CUBE' ? 'SHIP' : 'CUBE';
+                            obstaclesRef.current = obstaclesRef.current.filter(o => o !== obs);
+                        } else {
+                            handleGameOver();
+                            return false;
+                        }
+                    }
+                }
+
+                frameCountRef.current++;
+                if (frameCountRef.current % 80 === 0) spawnObstacle();
+                scoreRef.current += 0.1;
+                gameSpeedRef.current += 0.0005;
+                return true;
+            };
+
+            const handleGameOver = () => {
+                const finalScore = Math.floor(scoreRef.current);
+                setScore(finalScore);
+                if (finalScore > highScore) {
+                    setHighScore(finalScore);
+                    localStorage.setItem('highScore', finalScore.toString());
+                }
+                setStatus('GAMEOVER');
+                cancelAnimationFrame(requestRef.current);
+            };
+
+            const draw = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                const groundY = CANVAS_HEIGHT - 100;
+
+                ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+                // Ground
+                ctx.fillStyle = COLORS.GROUND;
+                ctx.fillRect(0, groundY, CANVAS_WIDTH, 100);
+                ctx.strokeStyle = COLORS.PRIMARY;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(0, groundY, CANVAS_WIDTH, 2);
+
+                // Obstacles
+                obstaclesRef.current.forEach(obs => {
+                    ctx.save();
+                    if (obs.type === 'SPIKE') {
+                        ctx.fillStyle = COLORS.SPIKE;
+                        ctx.beginPath(); ctx.moveTo(obs.x, obs.y+obs.h); ctx.lineTo(obs.x+obs.w/2, obs.y); ctx.lineTo(obs.x+obs.w, obs.y+obs.h); ctx.fill();
+                    } else if (obs.type === 'SAW') {
+                        ctx.translate(obs.x+obs.w/2, obs.y+obs.h/2);
+                        ctx.rotate(frameCountRef.current * 0.2);
+                        ctx.strokeStyle = '#ff4d4d'; ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        for(let i=0; i<10; i++) {
+                            const a = (i/10)*Math.PI*2;
+                            ctx.lineTo(Math.cos(a)*25, Math.sin(a)*25);
+                            ctx.lineTo(Math.cos(a+0.3)*15, Math.sin(a+0.3)*15);
+                        }
+                        ctx.closePath(); ctx.stroke();
+                    } else if (obs.type === 'PORTAL') {
+                        ctx.strokeStyle = COLORS.SECONDARY; ctx.lineWidth = 4;
+                        ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+                    } else {
+                        ctx.fillStyle = '#1e293b'; ctx.strokeStyle = COLORS.PRIMARY;
+                        ctx.fillRect(obs.x, obs.y, obs.w, obs.h); ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+                    }
+                    ctx.restore();
+                });
+
+                // Player
+                const player = playerRef.current;
+                ctx.save();
+                ctx.translate(PLAYER_X_OFFSET + PLAYER_SIZE/2, player.y + PLAYER_SIZE/2);
+                ctx.rotate(player.rotation);
+                ctx.fillStyle = player.mode === 'CUBE' ? COLORS.PRIMARY : COLORS.SECONDARY;
+                ctx.fillRect(-PLAYER_SIZE/2, -PLAYER_SIZE/2, PLAYER_SIZE, PLAYER_SIZE);
+                ctx.strokeStyle = '#fff'; ctx.strokeRect(-PLAYER_SIZE/2, -PLAYER_SIZE/2, PLAYER_SIZE, PLAYER_SIZE);
+                ctx.restore();
+
+                // Score
+                ctx.fillStyle = '#fff'; ctx.font = '20px Orbitron';
+                ctx.fillText(`SCORE: ${Math.floor(scoreRef.current)}`, 20, 40);
+            };
+
+            const loop = () => {
+                if (update()) {
+                    draw();
+                    requestRef.current = requestAnimationFrame(loop);
+                }
+            };
+
+            const start = () => {
+                scoreRef.current = 0;
+                gameSpeedRef.current = BASE_SPEED;
+                obstaclesRef.current = [];
+                frameCountRef.current = 0;
+                playerRef.current = { y: CANVAS_HEIGHT-132, vy:0, rotation:0, mode:'CUBE', isGrounded:true };
+                setStatus('PLAYING');
+            };
+
+            useEffect(() => {
+                if (status === 'PLAYING') requestRef.current = requestAnimationFrame(loop);
+                return () => cancelAnimationFrame(requestRef.current);
+            }, [status]);
+
+            return (
+                <div className="w-full h-screen flex flex-col items-center justify-center relative overflow-hidden bg-slate-950">
+                    <canvas 
+                        ref={canvasRef} 
+                        width={CANVAS_WIDTH} 
+                        height={CANVAS_HEIGHT} 
+                        onMouseDown={() => isInputActiveRef.current = true}
+                        onMouseUp={() => isInputActiveRef.current = false}
+                        onTouchStart={(e) => { e.preventDefault(); isInputActiveRef.current = true; }}
+                        onTouchEnd={(e) => { e.preventDefault(); isInputActiveRef.current = false; }}
+                    />
+
+                    {status === 'MENU' && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md">
+                            <h1 className="text-6xl font-orbitron font-bold text-cyan-400 mb-8">NEON DASH</h1>
+                            <button onClick={start} className="px-12 py-4 border-2 border-cyan-400 text-cyan-400 font-orbitron text-2xl hover:bg-cyan-400 hover:text-black transition-all">START</button>
+                            <p className="mt-8 text-slate-500 font-orbitron">HIGH SCORE: {highScore}</p>
+                        </div>
+                    )}
+
+                    {status === 'GAMEOVER' && (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-red-900/40 backdrop-blur-md">
+                            <h2 className="text-5xl font-orbitron font-bold text-white mb-4">CRASHED</h2>
+                            <p className="text-2xl text-white font-orbitron mb-8">SCORE: {score}</p>
+                            <button onClick={start} className="px-12 py-4 bg-white text-black font-orbitron text-xl hover:bg-cyan-400 transition-all">RETRY</button>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<Game />);
+    </script>
+</body>
+</html>
